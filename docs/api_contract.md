@@ -4,79 +4,83 @@
 
 http://127.0.0.1:8000
 
-## Health
+## 1. Health Check
 
 GET /health
 
-Returns backend health status.
+Checks whether the backend is running.
 
-## Analyze Offer
+## 2. Input Ingestion
 
-POST /api/analyze
+POST /api/ingest
 
 Content-Type: multipart/form-data
 
-Inputs:
-- file: Optional uploaded screenshot or PDF
-- text: Optional pasted offer text
+Accepts exactly one input.
 
-Exactly one input should be provided.
+### File input
 
-The backend will return an InvestigationReport.
+Field name: file
 
-## InvestigationReport
+Supported formats:
+- PNG
+- JPEG
+- WEBP
+- PDF
 
-Fields:
+### Text input
 
-- investigation_id
-- created_at
+Field name: text
+
+Accepts a pasted job or internship offer.
+
+### Response
+
+Returns IngestionSummary:
+
 - input_type
-- mode
-- status
-- extracted
-- risk
-- evidence
-- explanation
-- notes
+- source_filename
+- mime_type
+- text_characters
+- text_preview
+- page_count
+- pdf_metadata
+- visual_assets
+- warnings
 
-## RiskAssessment
+Binary image content is never included in this response.
 
-Fields:
+## 3. Planned Investigation Endpoint
 
-- risk_score: integer from 0 to 100
-- risk_band
-- verification_status
-- completed_checks
-- total_checks
-- coverage_percent
-- evidence_ids
-- caveats
+POST /api/analyze
 
-## Evidence
+This will be implemented in a later phase.
 
-Each evidence item contains:
+It will:
+1. Accept an offer.
+2. Prepare the input.
+3. Extract entities using Gemini.
+4. Run deterministic investigation tools.
+5. Calculate a risk assessment.
+6. Return an evidence-linked InvestigationReport.
 
-- evidence_id
-- check_name
-- status
-- severity
-- finding
-- observed_value
-- source_type
-- source_name
-- source_url
-- source_excerpt
-- page_number
-- checked_at
-- limitation
-- details
+## 4. Planned History Endpoint
+
+GET /api/history
+
+Retrieve previous investigations.
+
+## 5. Planned Individual Investigation
+
+GET /api/investigations/{id}
+
+Retrieve a previously stored investigation.
 
 ## Important semantics
 
-A CLEAR result does not mean an offer is safe.
-
-UNAVAILABLE and ERROR must never be treated as clean results.
-
-Risk scores are indicator scores, not fraud probabilities.
-
-Every risk evidence reference must correspond to an actual evidence item.
+- A CLEAR result does not prove an offer is safe.
+- UNAVAILABLE and ERROR are not equivalent to CLEAR.
+- Risk scores are indicator scores, not fraud probabilities.
+- Every risk evidence reference must point to an existing evidence record.
+- User-submitted claims must be distinguished from independently verified facts.
+- PDF metadata alone cannot establish that a document is forged.
