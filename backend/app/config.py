@@ -1,15 +1,10 @@
+
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
-# Project root:
-# ScamScope/
-#     backend/
-#         app/
-#             config.py
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -18,12 +13,7 @@ ENV_FILE = PROJECT_ROOT / ".env"
 
 class Settings(BaseSettings):
     """
-    Centralized application configuration.
-
-    Values are loaded from:
-    1. Environment variables
-    2. Root .env file
-    3. Default values defined below
+    Centralized configuration for ScamScope.
     """
 
     model_config = SettingsConfigDict(
@@ -33,9 +23,9 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
-    # -----------------------------------
-    # Application configuration
-    # -----------------------------------
+    # -------------------------------------
+    # Application
+    # -------------------------------------
 
     app_name: str = "ScamScope API"
 
@@ -43,31 +33,38 @@ class Settings(BaseSettings):
 
     app_version: str = "1.0.0"
 
-    # -----------------------------------
+    # -------------------------------------
     # Gemini configuration
-    # -----------------------------------
+    # -------------------------------------
 
     gemini_api_key: SecretStr | None = None
 
-    gemini_model: str | None = None
+    gemini_model: str | None = "gemini-3.8-flash"
 
-    # -----------------------------------
-    # External API credentials
-    # -----------------------------------
+    gemini_timeout_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        le=180,
+        description="Maximum time in seconds to wait for one Gemini API request.",
+    )
+
+    # -------------------------------------
+    # External APIs
+    # -------------------------------------
 
     virustotal_api_key: SecretStr | None = None
 
     google_safe_browsing_api_key: SecretStr | None = None
 
-    # -----------------------------------
-    # Application behaviour
-    # -----------------------------------
+    # -------------------------------------
+    # Application settings
+    # -------------------------------------
 
     demo_mode: bool = True
 
-    # -----------------------------------
-    # Upload restrictions
-    # -----------------------------------
+    # -------------------------------------
+    # Upload limits
+    # -------------------------------------
 
     max_upload_size_mb: int = Field(
         default=10,
@@ -81,9 +78,9 @@ class Settings(BaseSettings):
         le=20
     )
 
-    # -----------------------------------
+    # -------------------------------------
     # External tool timeout
-    # -----------------------------------
+    # -------------------------------------
 
     tool_timeout_seconds: float = Field(
         default=8.0,
@@ -91,17 +88,17 @@ class Settings(BaseSettings):
         le=60
     )
 
-    # -----------------------------------
-    # Database configuration
-    # -----------------------------------
+    # -------------------------------------
+    # Database
+    # -------------------------------------
 
     database_path: Path = (
         PROJECT_ROOT / "backend" / "scamscope.db"
     )
 
-    # -----------------------------------
-    # Frontend CORS configuration
-    # -----------------------------------
+    # -------------------------------------
+    # Frontend CORS
+    # -------------------------------------
 
     cors_origins: list[str] = Field(
         default_factory=lambda: [
@@ -113,9 +110,6 @@ class Settings(BaseSettings):
     @field_validator("gemini_model", mode="before")
     @classmethod
     def normalize_empty_model(cls, value):
-        """
-        Convert an empty model setting to None.
-        """
 
         if isinstance(value, str) and not value.strip():
             return None
@@ -124,10 +118,6 @@ class Settings(BaseSettings):
 
     @property
     def gemini_configured(self) -> bool:
-        """
-        True only when both the API key and
-        a model identifier are configured.
-        """
 
         key_available = (
             self.gemini_api_key is not None
@@ -147,9 +137,7 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """
-    Return a cached settings instance.
-
-    This prevents repeatedly reading the .env file.
+    Return cached application settings.
     """
 
     return Settings()

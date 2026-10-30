@@ -2,6 +2,7 @@ from pathlib import Path
 
 from app.config import (
     get_settings,
+    Settings,
     PROJECT_ROOT,
     ENV_FILE
 )
@@ -46,3 +47,7 @@ def test_database_path():
     assert isinstance(settings.database_path, Path)
 
     assert settings.database_path.name == "scamscope.db"
+
+def test_gemini_request_timeout_defaults_to_120_seconds():
+    settings = Settings(_env_file=None)
+    assert settings.gemini_timeout_seconds == 120.0
