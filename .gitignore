@@ -218,3 +218,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# ScamScope secrets
+.env
+.env.*
+!.env.example
+
+# Python environments
+backend/.venv/
+backend/venv/
+**/__pycache__/
+*.py[cod]
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploaded documents
+uploads/
