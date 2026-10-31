@@ -229,9 +229,9 @@ export function SubmitPage() {
             <div className="live-progress-list">
               <div className="live-progress-row done"><span><Check size={13} /></span><b>Input submitted</b><small>Request sent</small></div>
               <div className="live-progress-row current"><span><LoaderCircle size={13} /></span><b>Structured extraction</b><small>Waiting for API response</small></div>
-              <div className="live-progress-row"><span>03</span><b>Risk checks</b><small>Not connected in this phase</small></div>
+              <div className="live-progress-row"><span>03</span><b>Independent verification</b><small>Runs on the case report after extraction</small></div>
             </div>
-            <div className="live-no-fake"><LockKeyhole size={14} /> External checks are not simulated or reported as live findings.</div>
+            <div className="live-no-fake"><LockKeyhole size={14} /> External verification results are shown only after the backend returns them.</div>
             <button type="button" className="button button-outline cancel-wait" onClick={cancelWait}>Stop waiting</button>
           </div>
         </section>

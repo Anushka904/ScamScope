@@ -1,11 +1,10 @@
-"""Reliable, bounded extraction of recruitment offers with Gemini.
+"""Reliable, quota-free default extraction with an optional Gemini enhancer.
 
 The extractor deliberately separates three concerns:
 
-* Gemini extracts claims from untrusted source material.
-* Pydantic validates the returned structure locally.
-* Deterministic fallback extracts only high-confidence textual patterns
-  when the provider is temporarily unavailable.
+* Deterministic patterns extract explicit claims from selectable source text.
+* Optional Gemini can enhance extraction when deliberately enabled.
+* Pydantic validates model output locally; source excerpts are retained.
 
 This module never calculates a fraud score or declares an offer safe/fake.
 """
@@ -173,7 +172,9 @@ def create_gemini_client(settings: Settings):
         max_delay=3.0,
         exp_base=2.0,
         jitter=0.25,
-        http_status_codes=[408, 429, 500, 502, 503, 504],
+        # Do not retry HTTP 429: rate/quota exhaustion will not usually clear
+        # within the retry window, and repeated calls waste the user's quota.
+        http_status_codes=[408, 500, 502, 503, 504],
     )
     http_options = types.HttpOptions(
         timeout=int(timeout_seconds * 1000),
@@ -415,22 +416,22 @@ def classify_provider_error(error: Exception) -> ExtractionProviderError:
     if code == 401 or "unauthenticated" in message or "invalid api key" in message:
         return ExtractionProviderError(
             401, "Gemini authentication failed. Check GEMINI_API_KEY.",
-            fallback_allowed=False,
+            fallback_allowed=True,
         )
     if code == 403 or "permission_denied" in message:
         return ExtractionProviderError(
             403, "Gemini access is not permitted for this project.",
-            fallback_allowed=False,
+            fallback_allowed=True,
         )
     if code == 404 or "model_not_found" in message or "not found" in message and "model" in message:
         return ExtractionProviderError(
             404, "The configured Gemini model is unavailable to this API project.",
-            fallback_allowed=False,
+            fallback_allowed=True,
         )
     if code == 400 or "invalid_argument" in message:
         return ExtractionProviderError(
             502, "Gemini rejected the request configuration. Check the model and request fields.",
-            fallback_allowed=False,
+            fallback_allowed=True,
         )
 
     # Unknown transport errors can be temporary, but authentication/config
@@ -866,29 +867,66 @@ COMPANY_HIRING_PATTERN = re.compile(
     re.IGNORECASE,
 )
 ROLE_LABEL_PATTERN = re.compile(
-    r"\b(?:role|position|job\s+title)\s*[:\-]\s*([^\n.!?]{2,120})",
+    r"\b(?:role|position|job\s+title|internship\s+role)\s*[:\-]\s*([^\n.!?]{2,120})",
     re.IGNORECASE,
 )
+ROLE_CONTEXT_PATTERN = re.compile(
+    r"\b(?:position|role)\s+of\s+(?P<role>[A-Z][A-Za-z0-9&/(), .+'-]{2,100}?)"
+    r"\s+(?:at|with|for)\s+",
+    re.IGNORECASE,
+)
+# Anchor company labels at the start of a source line and require a colon or
+# typographic dash separator. The previous unanchored ``company\s*[-:]``
+# pattern misread words such as "company-domain" inside disclaimer prose as
+# a company-name label.
 COMPANY_LABEL_PATTERN = re.compile(
-    r"\b(?:company|organization|organisation)\s*[:\-]\s*([^\n.!?]{2,120})",
+    r"^[ \t]*(?:company(?:[ \t]+name)?|organization|organisation)"
+    r"[ \t]*(?::|：|—|–)[ \t]*([^\r\n]{2,120})",
+    re.IGNORECASE | re.MULTILINE,
+)
+COMPANY_SUFFIX = (
+    r"(?:Pvt\.?\s*Ltd\.?|Private\s+Limited|Limited|Inc\.?|LLC|LLP|"
+    r"Corporation|Technologies|Technology|Solutions|Systems|Labs|Industries|"
+    r"Group|Foundation|University|Enterprises)"
+)
+COMPANY_HEADER_PATTERN = re.compile(
+    rf"^\s*(?P<company>[A-Z][A-Za-z0-9&.,'() -]{{2,90}}?\s+{COMPANY_SUFFIX})\.?\s*$",
+    re.IGNORECASE,
+)
+COMPANY_CONTEXT_PATTERN = re.compile(
+    rf"\b(?:at|with|from|by)\s+(?P<company>[A-Z][A-Za-z0-9&.,'() -]{{2,90}}?\s+{COMPANY_SUFFIX})"
+    r"(?=[,;:\n.!?]|$)",
     re.IGNORECASE,
 )
 SALARY_CONTEXT_PATTERN = re.compile(
-    r"\b(stipend|salary|compensation|CTC|package|monthly pay)\b",
+    r"\b(stipend|salary|compensation|CTC|package|monthly\s+pay|remuneration)\b",
     re.IGNORECASE,
 )
 DATE_LABEL_PATTERN = re.compile(
-    r"\b(issue\s+date|date\s+of\s+issue|joining\s+date|date\s+of\s+joining)\s*[:\-]\s*([^\n.!?]{2,80})",
+    r"\b(issue\s+date|date\s+of\s+issue|joining\s+date|date\s+of\s+joining)\s*[:\-]?\s*([^\r\n]{2,100})",
     re.IGNORECASE,
 )
 RECRUITER_LABEL_PATTERN = re.compile(
-    r"\b(?:recruiter|HR\s+contact|contact\s+person)\s*[:\-]\s*([A-Z][A-Za-z .'-]{1,80})",
+    r"\b(?:recruiter(?:\s+name)?|HR(?:\s+(?:contact|representative|manager))?|"
+    r"contact\s+person|hiring\s+manager)\s*[:\-]\s*([^\r\n]{2,100})",
     re.IGNORECASE,
 )
 WEBSITE_LABEL_PATTERN = re.compile(
-    r"\b(?:company\s+website|official\s+website|website|web\s+site)\s*[:\-]\s*(https?://[^\s<>\"']+|www\.[^\s<>\"']+|[a-z0-9.-]+\.(?:com|org|net|in|co|io|ai|edu|gov|uk|tech|jobs))",
+    r"\b(?:company\s+website|official\s+website|website|web\s+site)\s*[:\-]\s*"
+    r"(https?://[^\s<>\"']+|www\.[^\s<>\"']+|[a-z0-9.-]+\.(?:com|org|net|in|co|io|ai|edu|gov|uk|tech|jobs|example))",
     re.IGNORECASE,
 )
+PERSON_NAME_PATTERN = re.compile(
+    r"^[A-Z][A-Za-z'.-]{1,30}(?:\s+[A-Z][A-Za-z'.-]{1,30}){1,3}$"
+)
+SIGNOFF_PATTERN = re.compile(
+    r"^\s*(?:regards|kind\s+regards|best\s+regards|sincerely|yours\s+sincerely|thanks|thank\s+you)\b[,\s:–-]*(.*)$",
+    re.IGNORECASE,
+)
+GENERIC_CONTACT_NAMES = {
+    "human resources", "hr team", "talent acquisition", "recruitment team",
+    "hiring team", "team", "people team", "nexora hr",
+}
 
 
 def _sentences_with_page_numbers(text: str) -> list[tuple[str, int | None]]:
@@ -907,16 +945,149 @@ def _sentences_with_page_numbers(text: str) -> list[tuple[str, int | None]]:
     return result
 
 
+def _lines_with_page_numbers(text: str) -> list[tuple[str, int | None]]:
+    """Return source lines while retaining PDF page markers."""
+    current_page: int | None = None
+    lines: list[tuple[str, int | None]] = []
+    for raw_line in text.splitlines():
+        page_match = re.match(r"\s*\[PAGE\s+(\d+)\]\s*$", raw_line, re.IGNORECASE)
+        if page_match:
+            current_page = int(page_match.group(1))
+            continue
+        line = raw_line.strip()
+        if line:
+            lines.append((line, current_page))
+    return lines
+
+
+def _clean_label_value(value: str) -> str:
+    """Remove common bullets and trailing signature/formatting fragments."""
+    cleaned = re.sub(r"^\s*(?:[-*•▪‣]+|\d+[.)])\s*", "", value)
+    cleaned = cleaned.strip(" \t,;:-–—|")
+    # Labels often share a line with a department after a vertical separator.
+    cleaned = re.split(r"\s+[|]\s+", cleaned, maxsplit=1)[0]
+    return cleaned.strip(" \t,;:-–—|")[:200]
+
+
+def _valid_person_name(value: str) -> str | None:
+    candidate = _clean_label_value(value)
+    candidate = re.sub(r"\s*,\s*(?:HR|Human\s+Resources|Talent\s+Acquisition).*$", "", candidate, flags=re.IGNORECASE)
+    candidate = candidate.strip(" .,:;-–—")
+    if candidate.casefold() in GENERIC_CONTACT_NAMES:
+        return None
+    if PERSON_NAME_PATTERN.fullmatch(candidate):
+        return candidate[:200]
+    return None
+
+
+def _extract_recruiter_name(lines: list[tuple[str, int | None]], text: str) -> tuple[str | None, str | None, int | None]:
+    """Read explicit recruiter labels or a conventional offer-letter sign-off."""
+    label_match = RECRUITER_LABEL_PATTERN.search(text)
+    if label_match:
+        candidate = _valid_person_name(label_match.group(1))
+        if candidate:
+            line, page = next(
+                ((line, page) for line, page in lines if candidate.casefold() in line.casefold()),
+                (label_match.group(0).strip(), None),
+            )
+            return candidate, line, page
+
+    for index, (line, page) in enumerate(lines):
+        signoff = SIGNOFF_PATTERN.match(line)
+        if not signoff:
+            continue
+        inline_candidate = _valid_person_name(signoff.group(1)) if signoff.group(1).strip() else None
+        if inline_candidate:
+            return inline_candidate, line, page
+        # The signatory is normally the first non-empty line after "Regards".
+        for next_line, next_page in lines[index + 1:index + 4]:
+            candidate = _valid_person_name(next_line)
+            if candidate:
+                return candidate, next_line, next_page
+            if re.search(r"\b(?:human\s+resources|talent\s+acquisition|hr\s+team|recruitment)\b", next_line, re.IGNORECASE):
+                continue
+            # Do not scan into a later paragraph after another sign-off block.
+            if len(next_line) > 100:
+                break
+    return None, None, None
+
+
+def _find_source_line(value: str | None, lines: list[tuple[str, int | None]]) -> tuple[str, int | None] | None:
+    if not value:
+        return None
+    target = _normalize_for_matching(value)
+    for line, page in lines:
+        if target and target in _normalize_for_matching(line):
+            return line, page
+    return None
+
+
+def _salary_value(sentence: str) -> str:
+    """Return the compensation value without repeating its source label."""
+    money = MONEY_PATTERN.search(sentence)
+    if not money:
+        return _clean_label_value(sentence)[:300]
+    value = money.group(0).strip()
+    if re.search(r"\b(monthly|per\s+month|a\s+month)\b|/\s*month", sentence, re.IGNORECASE):
+        return f"{value} / month"
+    if re.search(r"\b(annual|annually|per\s+year|per\s+annum)\b|/\s*(?:year|annum)", sentence, re.IGNORECASE):
+        return f"{value} / year"
+    return value
+
+
+def _extract_claimed_website(
+    lines: list[tuple[str, int | None]],
+) -> tuple[str | None, tuple[str, int | None] | None]:
+    """Extract a URL/domain following an explicit website label.
+
+    PDF text extraction often places a table label ("Claimed company website")
+    and its value on separate lines. Handle both same-line and next-line forms
+    while refusing to treat an arbitrary URL elsewhere in the document as the
+    claimed company website.
+    """
+    label_pattern = re.compile(
+        r"^[ \t]*(?:claimed[ \t]+)?(?:company[ \t]+website|official[ \t]+website|website|web[ \t]+site)"
+        r"[ \t]*(?::|：|—|–)?[ \t]*(.*)$",
+        re.IGNORECASE,
+    )
+    domain_pattern = re.compile(
+        r"(?i)^(?:https?://|www\.)[^\s<>\"']+|"
+        r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:/[^\s<>\"']*)?$"
+    )
+    for index, (line, page) in enumerate(lines):
+        match = label_pattern.match(line.strip())
+        if not match:
+            continue
+        candidates: list[tuple[str, str, int | None]] = [(match.group(1).strip(), line, page)]
+        candidates.extend(
+            (value.strip(), value, value_page)
+            for value, value_page in lines[index + 1:index + 3]
+        )
+        for candidate, source_line, source_page in candidates:
+            if not candidate:
+                continue
+            # Strip a small amount of PDF/Markdown punctuation, not URL path data.
+            candidate = candidate.strip("`*_ \t").rstrip(".,;:!?)\"")
+            token = candidate.split()[0] if candidate else ""
+            if domain_pattern.fullmatch(token):
+                return token[:500], (source_line, source_page)
+    return None, None
+
+
 def deterministic_text_fallback(
     prepared: PreparedInput,
-    provider_error: ExtractionError,
+    provider_error: ExtractionError | None = None,
 ) -> ExtractedOffer:
-    """Extract conservative, explicit patterns when Gemini is unavailable.
+    """Extract explicit text patterns without an external model or API quota.
 
-    Company/role/salary extraction uses labelled or direct hiring-language
-    patterns only. Unknown fields remain null; this is not a substitute for AI.
+    This is the default extraction engine. It deliberately leaves uncertain
+    fields unknown and does not infer identity, legitimacy, or a risk score.
+    Image-only inputs return a valid empty extraction record with a clear
+    warning because this local parser does not perform OCR.
     """
-    text = prepared.text_content
+    text = prepared.text_content or ""
+    lines = _lines_with_page_numbers(text)
+    sentences = _sentences_with_page_numbers(text)
 
     emails = _dedupe_strings(EMAIL_PATTERN.findall(text))
     urls = _dedupe_strings(
@@ -940,58 +1111,112 @@ def deterministic_text_fallback(
 
     company_name: str | None = None
     role_title: str | None = None
-    hiring_match = None
-    for sentence, _ in _sentences_with_page_numbers(text):
-        # The sentence splitter intentionally retains punctuation for evidence
-        # quotes. Remove only terminal punctuation for this structural match.
-        hiring_candidate = sentence.rstrip(" .!?;:")
-        hiring_match = COMPANY_HIRING_PATTERN.search(hiring_candidate)
-        if hiring_match:
-            break
-    if hiring_match:
-        company_name = hiring_match.group("company").strip(" \t,;:-")[:200] or None
-        role_title = hiring_match.group("role").strip(" \t,;:-")[:200] or None
+    company_source_line: tuple[str, int | None] | None = None
+    role_source_line: tuple[str, int | None] | None = None
 
+    # Prefer a masthead/company label over broad prose patterns. This avoids
+    # extracting names from disclaimers or hyphenated compounds such as
+    # "company-domain". Explicit labels and legal-suffix headers are strongest.
+    label_match = COMPANY_LABEL_PATTERN.search(text)
+    if label_match:
+        company_name = _clean_label_value(label_match.group(1)) or None
+        company_source_line = _find_source_line(company_name, lines)
+
+    # A legal suffix on a short standalone line is a strong masthead signal.
+    # Search near the beginning first; later legal-name mentions are often
+    # sign-offs or disclaimer references rather than the document issuer.
     if not company_name:
-        match = COMPANY_LABEL_PATTERN.search(text)
-        if match:
-            company_name = match.group(1).strip()[:200] or None
+        for line, page in lines[:25]:
+            header_match = COMPANY_HEADER_PATTERN.match(line)
+            if header_match:
+                candidate = _clean_label_value(header_match.group("company")) or None
+                if candidate and not re.search(
+                    r"\b(?:fictional|disclaimer|test fixture|company[- ]domain)\b",
+                    candidate,
+                    re.IGNORECASE,
+                ):
+                    company_name = candidate
+                    company_source_line = (line, page)
+                    break
+
+    # Explicit relation phrase, e.g. "position ... at Northstar Analytics Pvt. Ltd.".
+    if not company_name:
+        for line, page in lines:
+            context_match = COMPANY_CONTEXT_PATTERN.search(line)
+            if context_match:
+                candidate = _clean_label_value(context_match.group("company")) or None
+                if candidate and not re.search(
+                    r"\b(?:fictional|disclaimer|test fixture|company[- ]domain)\b",
+                    candidate,
+                    re.IGNORECASE,
+                ):
+                    company_name = candidate
+                    company_source_line = (line, page)
+                    break
+
+    # Fallback for ordinary text offers that state "ABC Ltd. is hiring ...".
+    if not company_name:
+        for sentence, page in sentences:
+            hiring_match = COMPANY_HIRING_PATTERN.search(sentence.rstrip(" .!?;:"))
+            if hiring_match:
+                candidate = _clean_label_value(hiring_match.group("company")) or None
+                if candidate and not re.search(
+                    r"\b(?:fictional|disclaimer|test fixture|company[- ]domain)\b",
+                    candidate,
+                    re.IGNORECASE,
+                ):
+                    company_name = candidate
+                    role_title = _clean_label_value(hiring_match.group("role")) or None
+                    company_source_line = _find_source_line(company_name, lines) or (sentence, page)
+                    role_source_line = (sentence, page)
+                    break
+
+    # Role from a label or a conventional "position of X at Y" sentence.
     if not role_title:
         match = ROLE_LABEL_PATTERN.search(text)
         if match:
-            role_title = match.group(1).strip()[:200] or None
+            role_title = _clean_label_value(match.group(1)) or None
+            role_source_line = _find_source_line(role_title, lines)
+    if not role_title:
+        for sentence, page in sentences:
+            role_match = ROLE_CONTEXT_PATTERN.search(sentence)
+            if role_match:
+                role_title = _clean_label_value(role_match.group("role")) or None
+                role_source_line = (sentence, page)
+                break
 
-    salary_claim = None
-    for sentence, _ in _sentences_with_page_numbers(text):
+    salary_claim: str | None = None
+    salary_source_line: tuple[str, int | None] | None = None
+    for sentence, page in sentences:
         if SALARY_CONTEXT_PATTERN.search(sentence):
-            salary_claim = sentence[:300]
+            salary_claim = _salary_value(sentence)
+            salary_source_line = (sentence, page)
             break
 
     claimed_issue_date = None
     claimed_joining_date = None
+    issue_source_line = None
+    joining_source_line = None
     for match in DATE_LABEL_PATTERN.finditer(text):
         label = match.group(1).lower()
-        value = match.group(2).strip()[:200]
+        value = _clean_label_value(match.group(2))[:200]
+        source_line = _find_source_line(value, lines)
         if "joining" in label and not claimed_joining_date:
             claimed_joining_date = value
+            joining_source_line = source_line
         elif "issue" in label and not claimed_issue_date:
             claimed_issue_date = value
+            issue_source_line = source_line
 
-    recruiter_match = RECRUITER_LABEL_PATTERN.search(text)
-    recruiter_name = recruiter_match.group(1).strip()[:200] if recruiter_match else None
-    website_match = WEBSITE_LABEL_PATTERN.search(text)
-    claimed_company_website = (
-        website_match.group(1).rstrip(".,;:!?)")[:500]
-        if website_match
-        else None
-    )
+    recruiter_name, recruiter_line, recruiter_page = _extract_recruiter_name(lines, text)
+    claimed_company_website, website_source_line = _extract_claimed_website(lines)
 
     payment_phrases: list[str] = []
     urgency_phrases: list[str] = []
     evidence: list[SourceExcerpt] = []
     payment_amount: str | None = None
 
-    for sentence, page_number in _sentences_with_page_numbers(text):
+    for sentence, page_number in sentences:
         is_negative = bool(NEGATIVE_PAYMENT_PATTERN.search(sentence))
         has_fee = bool(FEE_PATTERN.search(sentence))
         has_money = bool(MONEY_PATTERN.search(sentence))
@@ -999,15 +1224,12 @@ def deterministic_text_fallback(
         is_mandatory = bool(PAYMENT_MANDATORY_PATTERN.search(sentence))
         is_salary_context = bool(SALARY_CONTEXT_PATTERN.search(sentence))
         has_payment_purpose = bool(re.search(
-            r"\b(to confirm|to secure|for selection|registration|joining|"
+            r"\b(to confirm|to secure|for selection|registration|onboarding|joining|"
             r"processing|security deposit|application fee|training fee)\b",
             sentence,
             re.IGNORECASE,
         ))
 
-        # A salary/stipend sentence must never be mistaken for a payment
-        # request. Require a fee/deposit context or explicit transfer/payment
-        # language tied to a confirmation/selection purpose.
         is_payment_request = (
             not is_negative
             and not is_salary_context
@@ -1031,6 +1253,45 @@ def deterministic_text_fallback(
         if URGENCY_PATTERN.search(sentence):
             urgency_phrases.append(sentence[:1200])
 
+    # Attach verbatim source lines to the principal extracted claims. These are
+    # evidence snippets, not independent verification of the claims.
+    evidence_sources = [
+        ("company_name", company_source_line),
+        ("role_title", role_source_line),
+        ("salary_claim", salary_source_line),
+        ("claimed_issue_date", issue_source_line),
+        ("claimed_joining_date", joining_source_line),
+        ("recruiter_name", (recruiter_line, recruiter_page) if recruiter_line else None),
+        ("claimed_company_website", website_source_line),
+        ("sender_email", _find_source_line(emails[0] if emails else None, lines)),
+        ("sender_phone", _find_source_line(phones[0] if phones else None, lines)),
+        ("upi_id", _find_source_line(upi_ids[0] if upi_ids else None, lines)),
+    ]
+    seen_evidence = {(item.field_name.casefold(), item.quote.casefold(), item.page_number) for item in evidence}
+    for field_name, source_line in evidence_sources:
+        if not source_line:
+            continue
+        quote, page = source_line
+        key = (field_name.casefold(), quote.casefold(), page)
+        if key not in seen_evidence:
+            evidence.append(SourceExcerpt(field_name=field_name, quote=quote[:1200], page_number=page))
+            seen_evidence.add(key)
+
+    warnings = [
+        "Rule-based extraction mode was used. It captures explicit patterns in selectable text; fields may be incomplete.",
+        *prepared.warnings,
+    ]
+    if provider_error is not None:
+        warnings.append(
+            f"Optional Gemini extraction was unavailable (HTTP {provider_error.status_code}); rule-based extraction was used instead."
+        )
+    if not text.strip() and prepared.visual_assets:
+        warnings.append(
+            "No selectable text was available. This local rule-based mode does not perform OCR on image-only content; use a text-selectable PDF or paste the offer text."
+        )
+    elif not text.strip():
+        warnings.append("No readable text was available for rule-based extraction.")
+
     return ExtractedOffer(
         input_type=prepared.input_type,
         extraction_status=ExtractionStatus.FALLBACK,
@@ -1052,13 +1313,7 @@ def deterministic_text_fallback(
         payment_demand_phrases=_dedupe_strings(payment_phrases)[:30],
         urgency_phrases=_dedupe_strings(urgency_phrases)[:30],
         evidence_excerpts=evidence[:50],
-        extraction_warnings=[
-            "Gemini extraction was unavailable. Deterministic text-pattern "
-            "fallback was used; fields not found with high-confidence "
-            "patterns are left unknown.",
-            f"Gemini provider error: HTTP {provider_error.status_code}.",
-            *prepared.warnings,
-        ][:30],
+        extraction_warnings=list(dict.fromkeys(warnings))[:30],
     )
 
 
@@ -1082,17 +1337,30 @@ def extract_offer(
     structured_model: Any | None = None,
     settings: Settings | None = None,
 ) -> ExtractedOffer:
-    """Extract a normalized offer using Gemini, preserving explicit fallbacks.
+    """Extract structured claims using local rules or optional Gemini.
 
     ``structured_model`` is a test seam retained for offline unit tests.
-    Production uses the official Google GenAI SDK directly.
+    Production uses local deterministic extraction unless Gemini is explicitly
+    enabled via ``GEMINI_ENABLED=true``.
     """
     if not prepared.text_content.strip() and not prepared.visual_assets:
         raise ExtractionInputError("Input contains no usable content for extraction.")
 
     settings = settings or get_settings()
+
+    # The default production path is local and quota-free. Gemini is an
+    # explicitly enabled enhancement, never a prerequisite for extraction.
+    if structured_model is None and not settings.gemini_enabled:
+        return deterministic_text_fallback(prepared)
     if structured_model is None and not settings.gemini_configured:
-        raise ExtractionNotConfiguredError()
+        return deterministic_text_fallback(
+            prepared,
+            ExtractionProviderError(
+                503,
+                "Gemini was enabled but is not configured; rule-based extraction was used.",
+                fallback_allowed=True,
+            ),
+        )
 
     tasks = build_extraction_tasks(prepared)
     offers: list[ExtractedOffer] = []
@@ -1102,8 +1370,13 @@ def extract_offer(
     if structured_model is None:
         try:
             client = create_gemini_client(settings)
-        except ExtractionError:
-            raise
+        except ExtractionError as exc:
+            logger.warning("Gemini client initialization failed: %s", type(exc).__name__)
+            failure = ExtractionProviderError(
+                exc.status_code,
+                exc.detail,
+                fallback_allowed=True,
+            )
         except Exception as exc:
             logger.exception("Gemini client initialization failed: %s", type(exc).__name__)
             failure = classify_provider_error(exc)
@@ -1137,9 +1410,17 @@ def extract_offer(
                     logger.info("ScamScope extraction task %s/%s completed.", task_index, len(tasks))
 
                 except (ExtractionInputError, ExtractionOutputError) as exc:
-                    # Malformed JSON/schema output is not a transient provider outage.
-                    # Do not conceal it with a fallback. Preserve prior successful
-                    # chunks only when there is already usable extracted data.
+                    # Input validation errors remain hard failures. A malformed
+                    # optional-provider response can safely degrade to local rules.
+                    if isinstance(exc, ExtractionInputError):
+                        raise
+                    if not offers and structured_model is None:
+                        failure = ExtractionProviderError(
+                            502,
+                            "Gemini returned an invalid extraction response.",
+                            fallback_allowed=True,
+                        )
+                        break
                     if not offers:
                         raise
                     failure = exc
@@ -1174,10 +1455,7 @@ def extract_offer(
 
     # No AI task succeeded.
     if failure is not None and not offers:
-        if (
-            prepared.text_content.strip()
-            and should_use_fallback(failure)
-        ):
+        if should_use_fallback(failure):
             return deterministic_text_fallback(prepared, failure)
         raise failure
 

@@ -524,3 +524,21 @@ def test_ingest_rejects_unsupported_file():
     )
 
     assert response.status_code == 415
+
+
+def test_extract_endpoint_carries_pdf_metadata_into_phase_four(monkeypatch):
+    from app.models.extraction import ExtractedOffer, InputType
+
+    monkeypatch.setattr(
+        "app.api.extract.extract_offer",
+        lambda prepared: ExtractedOffer(input_type=InputType.PDF),
+    )
+    response = client.post(
+        "/api/extract",
+        files={"file": ("offer.pdf", make_text_pdf(), "application/pdf")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["input_type"] == "pdf"
+    assert body["pdf_metadata"]["page_count"] == 1
+    assert "data" not in body["pdf_metadata"]

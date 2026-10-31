@@ -1,35 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.extraction import InputType
-
-
-class PDFMetadata(BaseModel):
-    """
-    Extracted PDF document metadata.
-
-    All dates are retained as raw PDF metadata strings.
-    They are not treated as proof of document authenticity.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    title: str | None = None
-
-    author: str | None = None
-
-    subject: str | None = None
-
-    creator: str | None = None
-
-    producer: str | None = None
-
-    creation_date_raw: str | None = None
-
-    modification_date_raw: str | None = None
-
-    page_count: int = Field(ge=0)
-
-    is_encrypted: bool = False
+from app.models.pdf import PDFMetadata
 
 
 class VisualAsset(BaseModel):
@@ -37,7 +9,7 @@ class VisualAsset(BaseModel):
     Internal visual payload.
 
     Used to carry screenshots and rendered PDF pages
-    to the later Gemini extraction module.
+    to the structured extraction module (local rules by default; optional Gemini).
 
     Binary data is deliberately excluded from serialization.
     """

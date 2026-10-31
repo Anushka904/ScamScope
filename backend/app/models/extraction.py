@@ -3,6 +3,8 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.pdf import PDFMetadata
+
 
 class InputType(str, Enum):
     TEXT = "text"
@@ -87,11 +89,14 @@ class ExtractedOffer(BaseModel):
     extraction_status: ExtractionStatus = Field(
         default=ExtractionStatus.COMPLETE,
         description=(
-            "complete: all extraction tasks succeeded; partial: some tasks "
-            "failed; deterministic_fallback: Gemini was unavailable and "
-            "high-confidence text patterns were used instead."
+            "complete: all optional Gemini extraction tasks succeeded; partial: "
+            "some optional provider tasks failed; deterministic_fallback: local "
+            "rule-based patterns were used (the default or provider fallback)."
         )
     )
+
+    # Available only for PDF uploads; descriptive metadata, not authenticity proof.
+    pdf_metadata: PDFMetadata | None = None
 
     # -------------------------------------
     # Company information

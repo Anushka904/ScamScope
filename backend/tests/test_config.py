@@ -51,3 +51,23 @@ def test_database_path():
 def test_gemini_request_timeout_defaults_to_120_seconds():
     settings = Settings(_env_file=None)
     assert settings.gemini_timeout_seconds == 120.0
+
+
+def test_gemini_is_disabled_by_default():
+    settings = Settings(_env_file=None)
+    assert settings.gemini_enabled is False
+    assert settings.gemini_available is False
+
+
+def test_gemini_requires_explicit_enable_and_credentials():
+    disabled = Settings(_env_file=None, gemini_api_key="key")
+    enabled = Settings(_env_file=None, gemini_enabled=True, gemini_api_key="key")
+    missing_key = Settings(_env_file=None, gemini_enabled=True, gemini_api_key=None)
+    assert disabled.gemini_available is False
+    assert enabled.gemini_available is True
+    assert missing_key.gemini_available is False
+
+
+def test_new_domain_threshold_defaults_to_thirty_days():
+    settings = Settings(_env_file=None)
+    assert settings.new_domain_threshold_days == 30

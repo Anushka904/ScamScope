@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useState, type ComponentType } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   AlertTriangle, ArrowLeft, ArrowUpRight, ChevronDown, CircleHelp,
@@ -6,15 +6,22 @@ import {
   Mail, Printer, RefreshCw, ShieldAlert, Wallet, CalendarDays,
   Phone, UserRound, Link2, Quote, Info,
 } from "lucide-react";
-import type { ExtractionSession, ExtractedOffer, SourceExcerpt } from "../types";
+import type { ExtractionSession, ExtractedOffer, SourceExcerpt, VerificationCheck } from "../types";
+import { ApiError, buildInvestigationRecord, verifyOffer } from "../lib-api";
 
-const pendingChecks = [
-  { label: "Domain age", icon: Globe2 },
-  { label: "SSL / certificate", icon: LockKeyhole },
-  { label: "Sender mismatch", icon: Mail },
-  { label: "PDF metadata", icon: FileText },
-  { label: "Payment red flags", icon: Wallet },
-];
+const checkIcons = {
+  domain_age: Globe2,
+  website_availability: Globe2,
+  ssl_certificate: LockKeyhole,
+  sender_domain_match: Mail,
+  pdf_metadata: FileText,
+  payment_red_flags: Wallet,
+} as const;
+
+function statusLabel(status: VerificationCheck["status"]) {
+  const labels = { flag: "FLAGGED", clear: "CLEAR", unavailable: "UNAVAILABLE", error: "ERROR", not_applicable: "N/A" };
+  return labels[status];
+}
 
 function safeValue(value: string | null | undefined) {
   return value?.trim() || "Not found in submitted material";
@@ -59,6 +66,28 @@ export function CasePage() {
 
   const extracted = session?.extraction;
   const merged = useMemo(() => extracted ? { ...extracted, ...draft } : null, [extracted, draft]);
+  const [verification, setVerification] = useState<Awaited<ReturnType<typeof verifyOffer>> | null>(null);
+  const [verificationError, setVerificationError] = useState("");
+  const [isChecking, setIsChecking] = useState(false);
+
+  useEffect(() => {
+    if (!merged) return;
+    const controller = new AbortController();
+    // A verification result is valid only for the exact claims sent to the API.
+    // Re-run automatically whenever a local draft field changes, and abort the
+    // prior request so an older response cannot overwrite the newer result.
+    setVerification(null);
+    setVerificationError("");
+    setIsChecking(true);
+    verifyOffer(merged, controller.signal)
+      .then((result) => { if (!controller.signal.aborted) setVerification(result); })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setVerificationError(error instanceof ApiError ? error.message : error instanceof Error ? error.message : "Verification could not be completed.");
+      })
+      .finally(() => { if (!controller.signal.aborted) setIsChecking(false); });
+    return () => controller.abort();
+  }, [merged]);
 
   if (!session || !extracted || !merged) {
     return (
@@ -91,23 +120,19 @@ export function CasePage() {
   };
 
   const downloadReport = () => {
-    const report = {
-      product: "ScamScope",
-      report_type: "extraction_record_only",
-      schema_version: "phase-3-extraction",
-      generated_at: new Date().toISOString(),
-      notice: "This is not a fraud verdict. Risk scoring and independent external verification are not implemented in the current backend.",
-      submitted_file: session.fileName,
-      submitted_text: session.submittedText || undefined,
+    const report = buildInvestigationRecord({
+      submittedFile: session.fileName,
+      submittedText: session.submittedText,
       extraction: merged,
-      local_edits_are_not_reverified: true,
-      extraction_time_ms: session.durationMs,
-    };
+      verification,
+      localEditsWereIncluded: localEditCount > 0,
+      extractionTimeMs: session.durationMs,
+    });
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = "scamscope-extraction-record.json";
+    anchor.download = "scamscope-investigation-record.json";
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
@@ -115,7 +140,24 @@ export function CasePage() {
   };
 
   const setDraftValue = (key: keyof ExtractedOffer, value: string | boolean | string[] | null) => {
+    // Never leave a result for the previous draft visible or exportable.
+    setVerification(null);
+    setVerificationError("");
     setDraft((current) => ({ ...current, [key]: value }) as Partial<ExtractedOffer>);
+  };
+
+  const rerunChecks = async () => {
+    setIsChecking(true);
+    setVerification(null);
+    setVerificationError("");
+    try {
+      const result = await verifyOffer(merged);
+      setVerification(result);
+    } catch (error) {
+      setVerificationError(error instanceof ApiError ? error.message : error instanceof Error ? error.message : "Verification could not be completed.");
+    } finally {
+      setIsChecking(false);
+    }
   };
 
   const localEditCount = Object.keys(draft).length;
@@ -124,10 +166,10 @@ export function CasePage() {
     <main className="app-page case-page">
       <div className="case-topline">
         <Link to="/investigate" className="back-link"><ArrowLeft size={15} /> New investigation</Link>
-        <span>CASE FILE / EXTRACTION RECORD</span>
+        <span>CASE FILE / INVESTIGATION RECORD</span>
         <div className="case-top-actions">
           <button className="button button-outline button-small print-button" onClick={() => window.print()}><Printer size={14} /> Print / Save PDF</button>
-          <button className="button button-outline button-small" onClick={downloadReport}><Download size={14} /> Download JSON</button>
+          <button className="button button-outline button-small" onClick={downloadReport} disabled={!verification || isChecking} title={!verification ? "Wait for all verification checks to finish before exporting the complete record." : "Download the complete investigation record"}><Download size={14} /> {isChecking || !verification ? "Verification pending" : "Download JSON"}</button>
         </div>
       </div>
 
@@ -152,12 +194,12 @@ export function CasePage() {
               <div><span className="panel-index">01</span><h2>Extracted details</h2></div>
               <div className="report-tools">
                 <button className="text-button" onClick={() => setShowEditor((value) => !value)}><RefreshCw size={14} /> {showEditor ? "Close editor" : "Edit draft"}</button>
-                <button className="text-button disabled-tool" disabled title="Independent risk checks are not available yet.">Re-run checks <span>NOT CONNECTED</span></button>
+                <button className="text-button" onClick={rerunChecks} disabled={isChecking}><RefreshCw size={13} className={isChecking ? "spin" : ""} /> {isChecking ? "Running checks…" : verification ? "Re-run checks" : "Run checks"}</button>
               </div>
             </div>
             {showEditor && (
               <>
-                <div className="editor-notice"><AlertTriangle size={15} /><span>These are local draft changes only. The backend cannot re-run extraction or verification from edited values. {localEditCount ? `${localEditCount} field(s) edited.` : "No fields edited yet."}</span><button type="button" className="text-button" onClick={() => setDraft({})}>Reset draft</button></div>
+                <div className="editor-notice"><AlertTriangle size={15} /><span>These are local draft changes only; they do not change the submitted source text. Verification reruns automatically after an edit. {localEditCount ? `${localEditCount} field(s) edited.` : "No fields edited yet."}</span><button type="button" className="text-button" onClick={() => setDraft({})}>Reset draft</button></div>
                 <div className="editor-grid">
                   <FieldEditor label="Company name" value={merged.company_name || ""} onChange={(value) => setDraftValue("company_name", value || null)} />
                   <FieldEditor label="Role title" value={merged.role_title || ""} onChange={(value) => setDraftValue("role_title", value || null)} />
@@ -233,11 +275,29 @@ export function CasePage() {
         <aside className="case-side-column">
           <section className="panel trace-panel">
             <div className="panel-heading"><div><span className="panel-index">05</span><h2>Check trace</h2></div></div>
-            <div className="trace-summary"><span className="trace-summary-icon"><LockKeyhole size={15} /></span><div><b>Checks not connected</b><small>Independent verification engine not available yet.</small></div></div>
-            {pendingChecks.map(({ label, icon: CheckIcon }) => (
-              <div className="pending-check" key={label}><CheckIcon size={14} /><span>{label}</span><b>NOT RUN</b></div>
-            ))}
-            <p className="field-footnote">No check is reported as passed or flagged because the corresponding backend tools are not implemented yet.</p>
+            <div className="trace-summary">
+              <span className="trace-summary-icon"><LockKeyhole size={15} /></span>
+              <div>
+                <b>{isChecking ? "Verification running" : verification ? `${verification.completed_checks} / ${verification.total_checks} checks returned results` : "Verification not completed"}</b>
+                <small>{verification ? `${verification.overall_status.toUpperCase()} · ${verification.coverage_percent.toFixed(0)}% result coverage · ${verification.checks.filter((item) => item.status === "flag").length} flagged` : "Domain, TLS, sender, PDF and payment checks are being prepared."}</small>
+              </div>
+            </div>
+            {verification?.checks.map((check) => {
+              const CheckIcon = checkIcons[check.check_id];
+              return (
+                <div className="verification-check" key={check.check_id}>
+                  <div className="verification-check-head"><CheckIcon size={14} /><span>{check.label}</span><b className={`check-status status-${check.status}`}>{statusLabel(check.status)}</b></div>
+                  <p>{check.finding}</p>
+                  {check.observed_value && <small className="check-observed">{check.observed_value}</small>}
+                  {check.limitation && <small className="check-limitation">{check.limitation}</small>}
+                  {check.source_url && <a href={check.source_url} target="_blank" rel="noreferrer" className="check-source">Open source record <ArrowUpRight size={11} /></a>}
+                </div>
+              );
+            })}
+            {isChecking && !verification && <div className="verification-loading"><RefreshCw size={14} className="spin" /> Contacting public registries and checking local evidence…</div>}
+            {verificationError && <div className="verification-error"><AlertTriangle size={14} /> {verificationError}</div>}
+            {verification && verification.caveats.map((caveat, index) => <p className="field-footnote" key={index}>{caveat}</p>)}
+            {!verification && !isChecking && !verificationError && <p className="field-footnote">Run the checks to inspect the claims. A missing or unavailable result is never treated as a clean result.</p>}
           </section>
 
           <section className="panel source-panel">
@@ -261,7 +321,7 @@ export function CasePage() {
             </section>
           )}
           <div className="report-actions">
-            <button className="button button-primary" onClick={downloadReport}><Download size={15} /> Download extraction JSON</button>
+            <button className="button button-primary" onClick={downloadReport} disabled={!verification || isChecking} title={!verification ? "Wait for verification to finish before exporting." : "Download the complete investigation record"}><Download size={15} /> {isChecking || !verification ? "Verification pending" : "Download investigation JSON"}</button>
             <button className="button button-outline print-button" onClick={() => window.print()}><Printer size={15} /> Print / Save PDF</button>
             <Link to="/investigate" className="button button-outline">New case</Link>
           </div>

@@ -597,3 +597,22 @@ h1 em, h2 em { color: var(--ember); font-weight: 400; }
   .case-disclaimer { border-color: #ccc; }
   a { color: #171717 !important; text-decoration: none !important; }
 }
+
+/* Phase 4: live independent verification trace. */
+.verification-check { padding: 13px 0; border-bottom: 1px solid var(--line); display: grid; gap: 7px; }
+.verification-check-head { display: flex; align-items: center; gap: 8px; color: #9ca7a9; font-size: 9px; }
+.verification-check-head > svg { flex: 0 0 auto; color: #8a9ca8; }
+.verification-check-head > span { flex: 1; min-width: 0; }
+.check-status { font: 7px var(--mono); letter-spacing: .06em; white-space: nowrap; }
+.status-flag { color: #f09a67; }
+.status-clear { color: #79bda7; }
+.status-unavailable, .status-not_applicable { color: #82929b; }
+.status-error { color: #ef7777; }
+.verification-check > p { margin: 0; color: #b1b9b8; font-size: 9px; line-height: 1.6; }
+.check-observed, .check-limitation { display: block; color: #849198; font-size: 8px; line-height: 1.55; overflow-wrap: anywhere; }
+.check-limitation { color: #738087; }
+.check-source { display: inline-flex; align-items: center; gap: 5px; color: #c5a58c; font-size: 8px; text-decoration: none; width: fit-content; }
+.check-source:hover { color: var(--ember); }
+.verification-loading, .verification-error { display: flex; align-items: flex-start; gap: 8px; padding: 14px 0; color: #a7b2b4; font-size: 9px; line-height: 1.6; }
+.verification-loading svg, .verification-error svg { flex: 0 0 auto; }
+.verification-error { color: #ef9a86; }

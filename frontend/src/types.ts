@@ -1,6 +1,28 @@
 export type InputType = "text" | "image" | "pdf";
 export type ExtractionStatus = "complete" | "partial" | "deterministic_fallback";
 
+export interface PDFMetadata {
+  title: string | null;
+  author: string | null;
+  subject: string | null;
+  creator: string | null;
+  producer: string | null;
+  creation_date_raw: string | null;
+  modification_date_raw: string | null;
+  page_count: number;
+  is_encrypted: boolean;
+}
+
+export type EvidenceStatus = "flag" | "clear" | "unavailable" | "error" | "not_applicable";
+export type EvidenceSeverity = "strong" | "medium" | "weak" | "informational";
+export type VerificationCheckId =
+  | "domain_age"
+  | "website_availability"
+  | "ssl_certificate"
+  | "sender_domain_match"
+  | "pdf_metadata"
+  | "payment_red_flags";
+
 export interface SourceExcerpt {
   field_name: string;
   quote: string;
@@ -30,6 +52,51 @@ export interface ExtractedOffer {
   urgency_phrases: string[];
   evidence_excerpts: SourceExcerpt[];
   extraction_warnings: string[];
+  pdf_metadata: PDFMetadata | null;
+}
+
+export interface VerificationCheck {
+  check_id: VerificationCheckId;
+  label: string;
+  status: EvidenceStatus;
+  severity: EvidenceSeverity;
+  finding: string;
+  observed_value: string | null;
+  source_type: string;
+  source_url: string | null;
+  checked_at: string;
+  limitation: string | null;
+  details: Record<string, unknown>;
+  evidence_ids: string[];
+}
+
+export interface VerificationEvidence {
+  evidence_id: string;
+  check_name: string;
+  status: EvidenceStatus;
+  severity: EvidenceSeverity;
+  finding: string;
+  observed_value: string | null;
+  source_type: string;
+  source_name: string | null;
+  source_url: string | null;
+  source_excerpt: string | null;
+  page_number: number | null;
+  checked_at: string | null;
+  limitation: string | null;
+  details: Record<string, unknown>;
+}
+
+export interface VerificationReport {
+  verification_id: string;
+  checked_at: string;
+  overall_status: "completed" | "partial";
+  completed_checks: number;
+  total_checks: number;
+  coverage_percent: number;
+  checks: VerificationCheck[];
+  evidence: VerificationEvidence[];
+  caveats: string[];
 }
 
 export interface ExtractionSession {

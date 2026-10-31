@@ -49,7 +49,7 @@ async def ingest_input(
 
     Returns a serializable preprocessing summary.
 
-    This endpoint does not perform Gemini extraction yet.
+    This endpoint only validates and preprocesses input; use /api/extract for structured extraction.
     """
 
     # ------------------------------------
