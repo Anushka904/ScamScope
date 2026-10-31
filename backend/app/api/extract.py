@@ -27,14 +27,14 @@ from app.tools.input_errors import InputProcessingError
 
 router = APIRouter(
     prefix="/api",
-    tags=["Gemini Extraction"]
+    tags=["Offer Extraction"]
 )
 
 
 @router.post(
     "/extract",
     response_model=ExtractedOffer,
-    summary="Extract offer information using Gemini"
+    summary="Extract structured claims from a recruitment offer"
 )
 async def extract_input(
 
@@ -52,8 +52,10 @@ async def extract_input(
 
 ):
     """
-    Accept exactly one input and extract its
-    structured information using Gemini.
+    Accept exactly one input and extract structured claims.
+
+    Rule-based extraction is the default and does not require API credentials.
+    Optional Gemini extraction can be explicitly enabled in backend settings.
     """
 
     # -------------------------------------
@@ -150,13 +152,19 @@ async def extract_input(
             )
 
         # ---------------------------------
-        # Run Gemini in thread pool
+        # Run extraction in the thread pool (local rules by default; optional Gemini).
         # ---------------------------------
 
         extracted_offer = await run_in_threadpool(
             extract_offer,
             prepared
         )
+
+        # Carry PDF metadata into Phase 4 without exposing PDF binary data.
+        if prepared.pdf_metadata is not None:
+            extracted_offer = extracted_offer.model_copy(
+                update={"pdf_metadata": prepared.pdf_metadata}
+            )
 
         return extracted_offer
 

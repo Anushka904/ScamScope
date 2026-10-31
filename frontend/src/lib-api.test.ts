@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeExtractedOffer, extractOffer, ApiError } from "./lib-api";
+import { normalizeExtractedOffer, normalizeVerificationReport, extractOffer, ApiError, buildInvestigationRecord } from "./lib-api";
 
 const sampleExtraction = {
   input_type: "text",
@@ -92,5 +92,73 @@ describe("normalizeExtractedOffer", () => {
   it("rejects a request with both a file and text", async () => {
     const file = new File(["offer"], "offer.txt", { type: "text/plain" });
     await expect(extractOffer({ file, text: "This is some offer text." })).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe("normalizeVerificationReport", () => {
+  const checkIds = ["domain_age", "website_availability", "ssl_certificate", "sender_domain_match", "pdf_metadata", "payment_red_flags"] as const;
+  const verificationPayload = {
+    verification_id: "VER-ABC1234567",
+    checked_at: "2026-10-31T10:00:00Z",
+    overall_status: "completed",
+    completed_checks: 2,
+    total_checks: 6,
+    coverage_percent: 33.3,
+    checks: checkIds.map((check_id, index) => ({
+      check_id,
+      label: check_id,
+      status: index === 5 ? "flag" : index === 3 ? "clear" : "not_applicable",
+      severity: index === 5 ? "strong" : "informational",
+      finding: `Result for ${check_id}`,
+      observed_value: null,
+      source_type: "user_content",
+      source_url: null,
+      checked_at: "2026-10-31T10:00:00Z",
+      limitation: null,
+      details: {},
+      evidence_ids: [`EV-${String(index + 1).padStart(3, "0")}`],
+    })),
+    evidence: [],
+    caveats: ["A clear check does not establish legitimacy."],
+  };
+
+  it("accepts all six phase-four check categories and preserves their states", () => {
+    const result = normalizeVerificationReport(verificationPayload);
+    expect(result.checks).toHaveLength(6);
+    expect(result.checks[5].status).toBe("flag");
+    expect(result.coverage_percent).toBe(33.3);
+    expect(result.caveats).toContain("A clear check does not establish legitimacy.");
+  });
+
+  it("rejects incomplete verification responses instead of showing a partial trace as complete", () => {
+    expect(() => normalizeVerificationReport({ ...verificationPayload, checks: [] })).toThrow(/six check categories/);
+  });
+
+  it("exports a complete investigation record with the verification payload", () => {
+    const verification = normalizeVerificationReport(verificationPayload);
+    const extraction = normalizeExtractedOffer(sampleExtraction);
+    const record = buildInvestigationRecord({
+      extraction,
+      verification,
+      submittedFile: "offer.pdf",
+      submittedText: "source text",
+      localEditsWereIncluded: true,
+      extractionTimeMs: 123,
+      generatedAt: "2026-10-31T10:00:00.000Z",
+    });
+    expect(record.verification_status).toBe("completed");
+    expect(record.verification.verification_id).toBe("VER-ABC1234567");
+    expect(record.verification.checks).toHaveLength(6);
+    expect(record.local_edits_were_included_in_verification).toBe(true);
+  });
+
+  it("refuses to export a complete record before verification has finished", () => {
+    expect(() => buildInvestigationRecord({
+      extraction: normalizeExtractedOffer(sampleExtraction),
+      verification: null,
+      submittedFile: null,
+      localEditsWereIncluded: false,
+      extractionTimeMs: 50,
+    })).toThrow(/Verification must finish/);
   });
 });

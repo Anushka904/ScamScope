@@ -96,9 +96,10 @@ def make_image_input():
     )
 
 
-def make_settings(key="test-api-key"):
+def make_settings(key="test-api-key", gemini_enabled=True):
     return Settings(
         _env_file=None,
+        gemini_enabled=gemini_enabled,
         gemini_api_key=key,
         gemini_model="gemini-3.8-flash",
         gemini_timeout_seconds=120,
@@ -361,6 +362,38 @@ def test_fallback_extracts_company_role_salary_payment_email_and_upi():
     assert result.extraction_status == ExtractionStatus.FALLBACK
 
 
+def test_fallback_extracts_nexora_style_offer_company_recruiter_and_clean_salary():
+    text = (
+        "NEXORA TECHNOLOGIES PVT. LTD.\n"
+        "INTERNSHIP OFFER LETTER\n"
+        "We are pleased to offer you the position of Software Developer Intern at Nexora Technologies Pvt. Ltd.\n"
+        "Monthly Stipend: ₹25,000\n"
+        "Joining Date: 15 November 2026\n"
+        "To confirm your selection, you must pay a refundable registration and onboarding fee of ₹2,499 within 24 hours.\n"
+        "Website: www.nexora-careers.example\n"
+        "Email: rahul@nexora-careers.example\n"
+        "Phone: +91 9876543210\n"
+        "UPI ID: nexora.hr@okaxis\n"
+        "Regards,\nRahul Sharma\nHuman Resources"
+    )
+    result = deterministic_text_fallback(
+        make_text_input(text),
+        ExtractionProviderError(429, "quota exhausted"),
+    )
+    assert result.company_name == "NEXORA TECHNOLOGIES PVT. LTD."
+    assert result.role_title == "Software Developer Intern"
+    assert result.salary_claim == "₹25,000 / month"
+    assert result.claimed_joining_date == "15 November 2026"
+    assert result.recruiter_name == "Rahul Sharma"
+    assert result.payment_demand is True
+    assert result.payment_amount == "₹2,499"
+    assert result.claimed_company_website == "www.nexora-careers.example"
+    assert result.sender_email == "rahul@nexora-careers.example"
+    assert result.sender_phone == "+91 9876543210"
+    assert result.upi_ids == ["nexora.hr@okaxis"]
+    assert len(result.evidence_excerpts) >= 6
+
+
 def test_fallback_does_not_extract_email_prefix_as_upi_id():
     text = (
         "Example Robotics is hiring a Software Developer Intern. "
@@ -488,16 +521,16 @@ def test_service_unavailable_classification_allows_fallback():
     assert should_use_fallback(error)
 
 
-def test_invalid_argument_does_not_trigger_fallback():
+def test_invalid_argument_degrades_to_local_fallback():
     error = classify_provider_error(RuntimeError("400 INVALID_ARGUMENT"))
     assert error.status_code == 502
-    assert not should_use_fallback(error)
+    assert should_use_fallback(error)
 
 
-def test_authentication_error_does_not_trigger_fallback():
+def test_authentication_error_degrades_to_local_fallback():
     error = classify_provider_error(RuntimeError("401 UNAUTHENTICATED"))
     assert error.status_code == 401
-    assert not should_use_fallback(error)
+    assert should_use_fallback(error)
 
 
 # =====================================================
@@ -532,7 +565,7 @@ def test_create_gemini_client_uses_bounded_timeout_and_retry(monkeypatch):
     assert result == "fake-client"
     assert captured["http"]["timeout"] == 120_000
     assert captured["retry"]["attempts"] == 2
-    assert captured["retry"]["http_status_codes"] == [408, 429, 500, 502, 503, 504]
+    assert captured["retry"]["http_status_codes"] == [408, 500, 502, 503, 504]
 
 
 def test_invoke_gemini_uses_json_mode_low_thinking_and_no_schema(monkeypatch):
@@ -648,10 +681,12 @@ def test_extraction_rejects_invalid_model_output_without_fallback():
         )
 
 
-def test_extraction_requires_gemini_credentials():
-    settings = Settings(_env_file=None, gemini_api_key=None, gemini_model=None)
-    with pytest.raises(ExtractionNotConfiguredError):
-        extract_offer(make_text_input(), settings=settings)
+def test_extraction_defaults_to_rule_based_without_gemini_credentials():
+    settings = Settings(_env_file=None, gemini_enabled=False, gemini_api_key=None, gemini_model=None)
+    result = extract_offer(make_text_input(), settings=settings)
+    assert result.extraction_status == ExtractionStatus.FALLBACK
+    assert result.company_name == "ABC Technologies"
+    assert any("Rule-based extraction mode was used" in warning for warning in result.extraction_warnings)
 
 
 def test_provider_failure_returns_explicit_deterministic_fallback(monkeypatch):
@@ -674,10 +709,10 @@ def test_provider_failure_returns_explicit_deterministic_fallback(monkeypatch):
     assert result.company_name == "ABC Technologies"
     assert result.role_title == "Software Developer Intern"
     assert result.payment_demand is True
-    assert any("Deterministic text-pattern fallback" in w for w in result.extraction_warnings)
+    assert any("Optional Gemini extraction was unavailable" in w for w in result.extraction_warnings)
 
 
-def test_image_only_provider_failure_is_returned_as_provider_error(monkeypatch):
+def test_image_only_provider_failure_returns_explicit_empty_rule_based_record(monkeypatch):
     class FakeClient:
         def close(self):
             pass
@@ -687,8 +722,10 @@ def test_image_only_provider_failure_is_returned_as_provider_error(monkeypatch):
 
     monkeypatch.setattr(extractor, "create_gemini_client", lambda settings: FakeClient())
     monkeypatch.setattr(extractor, "invoke_gemini", fail)
-    with pytest.raises(ExtractionProviderError):
-        extract_offer(make_image_input(), settings=make_settings())
+    result = extract_offer(make_image_input(), settings=make_settings())
+    assert result.extraction_status == ExtractionStatus.FALLBACK
+    assert result.company_name is None
+    assert any("does not perform OCR" in warning for warning in result.extraction_warnings)
 
 
 def test_partial_chunk_failure_preserves_success_and_adds_fallback(monkeypatch):
@@ -733,10 +770,10 @@ def test_invalid_output_after_one_success_is_partial_not_fallback(monkeypatch):
     long_text = "ABC Technologies is hiring a Software Developer Intern. " + "Details. " * 2500
     result = extract_offer(make_text_input(long_text), settings=make_settings())
     assert result.extraction_status == ExtractionStatus.PARTIAL
-    assert not any("Deterministic text-pattern fallback" in w for w in result.extraction_warnings)
+    assert not any("Optional Gemini extraction was unavailable" in w for w in result.extraction_warnings)
 
 
-def test_visual_input_does_not_trigger_text_fallback_when_provider_fails(monkeypatch):
+def test_visual_input_provider_failure_returns_clear_rule_based_limitation(monkeypatch):
     class FakeClient:
         def close(self):
             pass
@@ -747,8 +784,9 @@ def test_visual_input_does_not_trigger_text_fallback_when_provider_fails(monkeyp
         "invoke_gemini",
         lambda *args, **kwargs: (_ for _ in ()).throw(ExtractionProviderError(503, "offline")),
     )
-    with pytest.raises(ExtractionProviderError):
-        extract_offer(make_image_input(), settings=make_settings())
+    result = extract_offer(make_image_input(), settings=make_settings())
+    assert result.extraction_status == ExtractionStatus.FALLBACK
+    assert any("does not perform OCR" in warning for warning in result.extraction_warnings)
 
 
 # =====================================================
@@ -786,6 +824,27 @@ def test_extract_endpoint_rejects_both_inputs():
 def test_extract_endpoint_rejects_empty_input():
     response = client.post("/api/extract")
     assert response.status_code == 422
+
+
+def test_extract_endpoint_works_without_gemini_quota(monkeypatch):
+    settings = Settings(_env_file=None, gemini_enabled=False, gemini_api_key=None)
+    monkeypatch.setattr("app.api.extract.get_settings", lambda: settings)
+    monkeypatch.setattr(extractor, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        extractor,
+        "create_gemini_client",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Gemini must not be called in default mode")),
+    )
+    response = client.post(
+        "/api/extract",
+        data={"text": "ABC Technologies is hiring a Software Developer Intern. Pay ₹2,000 as a registration fee."},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["extraction_status"] == "deterministic_fallback"
+    assert body["company_name"] == "ABC Technologies"
+    assert body["payment_demand"] is True
+    assert body["payment_amount"] == "₹2,000"
 
 
 def test_extract_endpoint_maps_missing_credentials(monkeypatch):

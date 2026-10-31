@@ -46,7 +46,7 @@ No binary image content is returned.
 
 ---
 
-## 3. Gemini Extraction
+## 3. Offer Extraction
 
 POST /api/extract
 
@@ -60,10 +60,10 @@ Accepts exactly one input:
 Processing:
 
 1. Validates and preprocesses input.
-2. Creates a multimodal Gemini request.
-3. Extracts structured entities.
-4. Validates the result using Pydantic.
-5. Returns an ExtractedOffer.
+2. By default, runs local deterministic patterns over selectable text.
+3. Optionally uses Gemini only when `GEMINI_ENABLED=true` and valid credentials are configured.
+4. Validates model output using Pydantic when Gemini is enabled.
+5. Returns an `ExtractedOffer` with source excerpts and explicit limitations.
 
 ### ExtractedOffer fields
 
@@ -91,11 +91,9 @@ Processing:
 
 `extraction_status` is authoritative about how the result was produced:
 
-- `complete`: every extraction task completed successfully with Gemini.
-- `partial`: some tasks completed, while one or more tasks failed.
-- `deterministic_fallback`: Gemini was unavailable and only explicit,
-  high-confidence text patterns were extracted. Fields that could not be
-  confidently identified remain null/empty. This is not equivalent to AI extraction.
+- `complete`: every optional Gemini extraction task completed successfully.
+- `partial`: some optional provider tasks completed, while one or more tasks failed.
+- `deterministic_fallback`: local rule-based extraction was used. This is the default mode and is also used when the optional Gemini provider is unavailable. It identifies explicit patterns in selectable text; fields that cannot be confidently identified remain null/empty. This is not equivalent to AI extraction.
 
 ### Error responses
 
@@ -107,31 +105,15 @@ Processing:
 
 422: Invalid input.
 
-429: Gemini quota/rate limit reached.
-
-502: Gemini/provider extraction failure.
-
-503: Gemini credentials or configuration missing.
-
-504: Gemini request timed out.
+The default local extraction path does not return provider quota errors. When optional Gemini mode is explicitly enabled, provider failures on readable text degrade to rule-based extraction. Input validation errors remain 4xx responses.
 
 ---
 
-## 4. Planned Investigation Endpoint
+## 4. Planned Investigation Aggregation Endpoint (Phase 5)
 
 POST /api/analyze
 
-This will be implemented in later phases.
-
-It will:
-
-1. Accept an offer.
-2. Prepare and extract its content.
-3. Perform domain, SSL, DNS and reputation checks.
-4. Aggregate deterministic evidence.
-5. Calculate a risk score.
-6. Generate an evidence-grounded explanation.
-7. Return an InvestigationReport.
+This endpoint is not implemented yet. Phase 5 will orchestrate extraction plus the existing `/api/verify` checks, then calculate an explainable risk assessment from supported evidence. Missing, unavailable, and not-applicable results must not be treated as clean signals. It will return an evidence-grounded explanation and will not claim certainty beyond the evidence.
 
 ---
 
@@ -162,3 +144,37 @@ Retrieve a stored investigation report.
   verified against the original visual document.
 - No extraction result is a fraud verdict.
 - Risk scores are calculated separately by Python.
+
+## Phase 4 — Independent verification (`POST /api/verify`)
+
+Request body:
+
+```json
+{
+  "extracted": {
+    "input_type": "text",
+    "extraction_status": "deterministic_fallback",
+    "company_name": "Example Company",
+    "domains": ["example.com"],
+    "sender_email": "hr@example.com",
+    "payment_demand": false
+  }
+}
+```
+
+The `extracted` object follows the Phase 3 `ExtractedOffer` schema. PDF extraction responses additionally include a nullable `pdf_metadata` object. This is descriptive file metadata, not proof of authenticity.
+
+The response contains six check categories:
+
+- `domain_age`: uses the authoritative RDAP service discovered through the IANA DNS bootstrap registry (RFC 9224). If the supplied value is a host/subdomain (for example `www.wikipedia.org`) and a registry returns HTTP 400/404, the checker retries parent candidates and records the registered-domain name it actually queried. Rate-limit and server errors remain unavailable results.
+- `website_availability`: checks whether the first explicit company website/domain responds over HTTP(S). The request is restricted to public destinations, non-standard ports are rejected, and redirects are revalidated.
+- `ssl_certificate`: validates the TLS certificate chain and hostname for the primary claimed domain.
+- `sender_domain_match`: compares the extracted sender email domain with the company domains explicitly present in the submitted material.
+- `pdf_metadata`: reviews embedded metadata and checks whether a parseable creation timestamp occurs after the modification timestamp. Not applicable to text/image inputs.
+- `payment_red_flags`: surfaces explicit payment demand, urgency/pressure phrases and UPI identifiers found during Phase 3 extraction.
+
+Each check has an explicit `status`: `flag`, `clear`, `unavailable`, `error`, or `not_applicable`. External provider/network failures are `unavailable` and are never converted into clean results. Reserved test/documentation suffixes such as `.example` are `not_applicable` for RDAP, website and TLS checks; no live network request is made for them.
+
+The response includes provenance, timestamp, observed values, limitations, evidence IDs and an `evidence` list suitable for future Phase 5 scoring. The frontend Check Trace automatically runs after extraction and reruns when local draft fields change. A complete JSON investigation export includes both extraction and verification; export remains disabled while verification is pending or unavailable. **Phase 4 does not produce a risk score, fraud probability, or genuine/fake verdict.** A `clear` result only means that a specific check did not observe its stated warning condition.
+
+The service uses the existing `TOOL_TIMEOUT_SECONDS` setting. `NEW_DOMAIN_THRESHOLD_DAYS` defaults to `30`; a domain registered within that interval is surfaced as a medium warning indicator, not as proof of fraud.

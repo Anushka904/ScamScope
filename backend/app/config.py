@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # Gemini configuration
     # -------------------------------------
 
+    # Gemini is an optional enhancement. Rule-based extraction is the default
+    # so the application remains usable without provider quota or billing.
+    gemini_enabled: bool = False
+
     gemini_api_key: SecretStr | None = None
 
     gemini_model: str | None = "gemini-3.8-flash"
@@ -88,6 +92,13 @@ class Settings(BaseSettings):
         le=60
     )
 
+    new_domain_threshold_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Domains registered more recently than this are marked as a weak-to-medium warning indicator.",
+    )
+
     # -------------------------------------
     # Database
     # -------------------------------------
@@ -132,6 +143,11 @@ class Settings(BaseSettings):
         )
 
         return key_available and model_available
+
+    @property
+    def gemini_available(self) -> bool:
+        """True only when the optional provider is explicitly enabled and configured."""
+        return self.gemini_enabled and self.gemini_configured
 
 
 @lru_cache(maxsize=1)

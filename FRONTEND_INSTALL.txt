@@ -1,0 +1,30 @@
+SCAMSCOPE — FINAL EXTRACTION RELEASE
+
+1. Keep your current repository and branch. Before extracting, run `git status` and preserve any uncommitted work.
+
+2. Extract `ScamScope_FreeTier_Extraction_Final.zip` directly into your existing ScamScope repository root, allowing it to overwrite matching source files. The archive includes the updated backend, frontend, tests and documentation. It does NOT contain or overwrite `.env`, `frontend/.env.local`, `.git`, `backend/.venv`, `frontend/node_modules` or generated `dist` files.
+
+3. The default extraction engine is local rule-based extraction. It requires no Gemini API key or quota. `GEMINI_ENABLED` defaults to false, even if your root `.env` already contains a Gemini key. Do not enable it for the free-tier workflow.
+
+4. Start backend in Terminal 1:
+
+   cd backend
+   .\.venv\Scripts\Activate.ps1
+   python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+5. Verify frontend in Terminal 2:
+
+   cd frontend
+   npm install
+   npm run typecheck
+   npm test
+   npm run build
+   npm run dev
+
+6. Open http://127.0.0.1:5173. Keep both terminals running.
+
+7. The backend test suite for this release has 100 passing tests. The frontend TypeScript check passes. Run the frontend tests/build on Windows after `npm install` to install the correct platform-specific dependencies.
+
+LIMITATION: Local rule-based extraction handles pasted text and text-selectable PDFs. Image-only inputs without selectable/OCR text return a clear limitation instead of invented fields. Risk scoring and independent verification remain the next phase.
+
+SECURITY: Never add provider secrets to `frontend/.env.local`. Keep `.env` private and do not include it in archives or commits.

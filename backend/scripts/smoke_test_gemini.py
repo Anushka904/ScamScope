@@ -26,6 +26,9 @@ SAMPLE_TEXT = (
 
 def main() -> int:
     settings = get_settings()
+    if not settings.gemini_enabled:
+        print("FAIL: Optional Gemini mode is disabled. Set GEMINI_ENABLED=true in the root .env to run this live-provider smoke test.")
+        return 2
     if not settings.gemini_configured:
         print("FAIL: Gemini is not configured. Check the root .env file.")
         return 2

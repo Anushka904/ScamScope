@@ -7,6 +7,7 @@ from app.config import get_settings
 from app.api.health import router as health_router
 from app.api.ingest import router as ingest_router
 from app.api.extract import router as extract_router
+from app.api.verify import router as verify_router
 
 
 # -------------------------------------
@@ -58,6 +59,7 @@ app.include_router(health_router)
 app.include_router(ingest_router)
 
 app.include_router(extract_router)
+app.include_router(verify_router)
 
 
 # -------------------------------------
